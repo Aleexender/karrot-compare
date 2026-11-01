@@ -1,0 +1,120 @@
+# 버그율 비교: with-design vs no-design (2026-11-01, 로컬)
+
+## 결론
+
+같은 요구서(`with-design/docs/01-post-create-requirements.md`)를 기준으로 두 앱에 똑같은 시나리오 24건을 실행했습니다.
+
+| 구분 | 케이스 수 | with-design 실패 | no-design 실패 |
+|---|---|---|---|
+| 요구서에 **명시된** 요구 + 완료 기준 | 15 | 0 (0%) | 7 (46.7%) |
+| 요구서에서 **추론한** 엣지 케이스 | 9 | 0 (0%) | 3 (33.3%) |
+| **합계** | **24** | **0 (0%)** | **10 (41.7%)** |
+
+- 두 앱 모두 이 측정 중 5xx는 한 번도 나지 않았습니다.
+- 동시 1만 건 완료 기준은 두 앱 모두 통과했습니다(2회씩 10,000/10,000). 다만 no-design은 처리 시간이 약 10배 길었습니다(3.3초 vs 30~35초).
+- no-design 실패 10건은 모두 **요구서에 있는 기능이 없거나 다르게 동작**하는 경우입니다. 같은 키 중복 방지, 네고·카테고리, 경로, 빈 내용 허용이 여기에 해당합니다.
+
+## 비교의 전제 (공정성)
+
+- no-design은 한 줄 프롬프트("POST로 게시글 올리는 API 하나 작성해줘", [원문](../no-design/docs/01-post-create-prompt.md))로 만들어졌습니다. 이 요구서를 받은 적이 없으므로, 이 측정은 "코드 품질"보다 **"요구사항을 얼마나 충족하는가"**를 잽니다. 설계 없이 시작하면 요구서와 얼마나 벌어지는지를 보는 것이 목적입니다.
+- 두 앱의 API 계약이 달라서, 같은 논리 요청을 각 앱의 실제 형식으로 바꿔 보냈습니다(`measurement/functional.py`의 `App.post`).
+
+| 항목 | with-design | no-design |
+|---|---|---|
+| 경로 | `POST /posts` | `POST /api/posts` (A6만 `/posts`로 따로 검사) |
+| 작성자 | 헤더 `X-User-Id` | 본문 `sellerId` |
+| 중복 방지 키 | 헤더 `Idempotency-Key` | 같은 헤더를 보내지만 앱이 무시 |
+| 네고·카테고리 | 본문 `negotiable`, `categoryId` | 같은 필드를 보내지만 앱이 무시 |
+| `location` | 보내지 않음 | 항상 `"서울"`을 보냄. no-design 필수 필드라 빼면 모든 요청이 400이 되어 비교가 무의미해짐 |
+
+- 판정 기준은 HTTP 상태 코드와 **DB 행 수 변화** 두 가지입니다. 응답만 보지 않고, 요청 전후 `items`/`posts` 행 수를 직접 셌습니다.
+- 두 앱 모두 코드와 설정을 바꾸지 않고, 저장소에 있는 그대로 실행했습니다.
+
+## 측정 과정
+
+1. **환경**: MySQL 9.7.4(`karrot-mysql`, localhost:3307), Java 25, macOS(arm64). with-design은 :8081, no-design은 :8082에서 `./gradlew bootRun`으로 동시에 띄웠습니다.
+2. **사전 확인**: with-design 테스트 스위트 `./gradlew clean test` → 92건 통과. no-design은 기본 `contextLoads` 테스트 1건뿐이라 따로 돌리지 않았습니다.
+3. **데이터 준비**: with-design은 작성자 존재 확인을 하므로 users에 id 2(B9용)와 100001~101000(1만 건 부하용)을 넣었습니다. no-design은 users 테이블이 없어 준비가 필요 없습니다.
+4. **기능 시나리오 23건**: `python3 measurement/functional.py`. 두 앱에 같은 순서로 실행합니다. 동시 클릭 케이스는 `threading.Barrier`로 요청을 동시에 출발시키고 10회 반복했습니다.
+5. **완료 기준(동시 1만 건)**: `measurement/burst.sh` → `Burst.java`. 유저 1,000명 × 10건, 키는 모두 다르고, 가상 스레드 1만 개를 `CountDownLatch`로 동시에 출발시킵니다. 클라이언트 timeout은 연결 60초, 요청 120초입니다. 앱을 번갈아 2회씩 돌렸고, 클라이언트 임시 포트(TIME_WAIT)가 비도록 실행 사이에 90초씩 쉬었습니다. 시작 직전 TIME_WAIT는 42, 0, 0, 0개였습니다. 클라이언트 `ulimit -n`은 1,048,576입니다.
+6. **정리**: 측정 후 두 앱을 종료하고 측정 데이터를 지웠습니다. with-design에는 users id=1만 남겼고 items는 0행입니다. no-design은 측정 전부터 있던 posts 2행만 남겼습니다.
+
+## 결과 상세
+
+### 요구서 명시 요구 (15건)
+
+| # | 출처 | 시나리오 | 기대 | with-design | no-design |
+|---|---|---|---|---|---|
+| A1 | L4-5 | 정상 등록 | 2xx, DB +1 | ✅ 201, +1 | ✅ 201, +1 |
+| A2 | L4 | 한 유저가 게시글 2개 | 둘 다 2xx, DB +2 | ✅ 201/201, +2 | ✅ 201/201, +2 |
+| A3 | L6 | 등록 시 판매중 상태 | 판매중 | ✅ `ON_SALE` | ✅ `SELLING` |
+| A4 | L6 | 네고가능 true 저장 | negotiable = true | ✅ true | ❌ 필드 없음 |
+| A5 | L7 | 카테고리 지정(2) | categoryId = 2 | ✅ 2 | ❌ 필드 없음 |
+| A6 | L5 | 경로 `POST /posts` | 2xx | ✅ 201 | ❌ 404 (`/api/posts`) |
+| A7 | L14 | 같은 키 동시 2회 클릭 ×10 | 매회 DB +1 | ✅ 10/10회 1건 | ❌ 0/10회, 매회 +2 |
+| A8 | L14 | 같은 키 빠른 연속 2회 | DB +1 | ✅ 201/200, +1 | ❌ 201/201, +2 |
+| A9 | L15 | 가격 누락 | 4xx, DB +0 | ✅ 400 | ✅ 400 |
+| A10 | L15 | 가격 null | 4xx, DB +0 | ✅ 400 | ✅ 400 |
+| A11 | L16 | 제목 누락 | 4xx, DB +0 | ✅ 400 | ✅ 400 |
+| A12 | L16 | 제목 빈 문자열 | 4xx, DB +0 | ✅ 400 | ✅ 400 |
+| A13 | L17 | 내용 누락 | 2xx, DB +1 | ✅ 201 | ❌ 400 |
+| A14 | L17 | 내용 빈 문자열 | 2xx, DB +1 | ✅ 201 | ❌ 400 |
+| A15 | L27 | 동시 1만 건 중 9,500건 이상 저장 | 2xx ≥ 9,500, DB 증가 = 2xx | ✅ 아래 표 | ✅ 아래 표 |
+
+### 요구서에서 추론한 엣지 케이스 (9건)
+
+planner 분석에서 "[추론]"으로 분류한 항목입니다. 요구서에 직접 적혀 있지는 않아서 따로 집계했습니다.
+
+| # | 시나리오 | 기대 | with-design | no-design |
+|---|---|---|---|---|
+| B1 | 제목 공백만 | 4xx | ✅ 400 | ✅ 400 |
+| B2 | 가격 음수 | 4xx | ✅ 400 | ✅ 400 |
+| B3 | 제목 101자 | 4xx (5xx 아님) | ✅ 400 | ✅ 400 |
+| B4 | JSON 문법 오류 | 4xx | ✅ 400 | ✅ 400 |
+| B5 | 가격 `"abc"` | 4xx | ✅ 400 | ✅ 400 |
+| B6 | 가격 12.5 | 4xx, 잘려서 저장되면 안 됨 | ✅ 400 | ❌ 201, **12원으로 저장** |
+| B7 | 존재하지 않는 유저 | 4xx | ✅ 401 | ❌ 201, 그대로 저장 |
+| B8 | 같은 키 동시 3회 ×10 | 매회 DB +1 | ✅ 10/10회 1건 | ❌ 0/10회, 매회 +3 |
+| B9 | 다른 유저가 같은 키 | DB +2 (서로 독립) | ✅ +2 | ✅ +2 |
+
+### 완료 기준: 동시 1만 건 (A15)
+
+| 회차 | 앱 | 2xx | 4xx/5xx/연결 실패 | DB 증가 | 소요 시간 |
+|---|---|---|---|---|---|
+| 1 | with-design | 10,000 | 0 | 10,000 | 3,374ms |
+| 1 | no-design | 10,000 | 0 | 10,000 | 34,516ms |
+| 2 | with-design | 10,000 | 0 | 10,000 | 3,291ms |
+| 2 | no-design | 10,000 | 0 | 10,000 | 30,500ms |
+
+- 두 앱 모두 기준(9,500건)을 넘었습니다.
+- no-design이 약 10배 느린 이유는 설정 차이로 봅니다 `[INFERENCE: 원인을 따로 계측하지는 않음]`. no-design은 Tomcat 기본 스레드 200개, Hikari 기본 풀 10개이고 가상 스레드를 쓰지 않습니다. with-design은 가상 스레드와 풀 50개를 씁니다.
+- no-design의 처리 시간 30~35초는 Hikari 기본 대기 시간 30초와 비슷한 수준입니다. 이번에는 실패가 없었지만, 요청이 조금만 더 몰리면 대기 초과 오류가 날 수 있는 거리입니다 `[INFERENCE]`.
+
+### 정적 확인 (집계에서 제외)
+
+API 호출로는 확인할 수 없는 요구사항이라 버그율에는 넣지 않았습니다.
+
+| 요구 | with-design | no-design |
+|---|---|---|
+| 판매 상태 3종: 판매중·판매완료·판매중지 (L6) | `ON_SALE`/`SOLD`/`STOPPED` | `SELLING`/`RESERVED`/`SOLD`. 판매중지가 없고 요구서에 없는 예약중이 있음 |
+| 도메인 items·users·item_categories (L8) | 3개 모두 있음 | `posts` 하나뿐 |
+| users는 item_categories를 모름 (L9) | 지켜짐(import 0건) | 해당 도메인이 없어서 판정 불가 |
+| 인터페이스는 repository만 (L10) | 지켜짐 | 지켜짐 |
+
+## 재현 방법
+
+```bash
+docker compose up -d
+(cd with-design && ./gradlew bootRun) &   # :8081
+(cd no-design   && ./gradlew bootRun) &   # :8082
+
+# with-design 작성자 준비 (users id 1은 있다고 가정)
+docker exec karrot-mysql mysql -ukarrot -pkarrot karrot_with_design -e "
+  INSERT INTO users (id,nickname,created_at) VALUES (2,'bugrate-user-2',UTC_TIMESTAMP(6));
+  INSERT INTO users (id,nickname,created_at)
+    WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<1000)
+    SELECT 100000+n, CONCAT('burst-',n), UTC_TIMESTAMP(6) FROM s;"
+
+python3 measurement/functional.py   # 기능 23건, 결과는 functional.json
+measurement/burst.sh                # 동시 1만 건 × 앱별 2회 (약 6분)
+```
