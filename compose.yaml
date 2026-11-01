@@ -1,0 +1,16 @@
+services:
+  mysql:
+    image: mysql:9.7
+    container_name: karrot-mysql
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: karrot
+      MYSQL_PASSWORD: karrot
+    volumes:
+      - ./mysql-init:/docker-entrypoint-initdb.d
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:
