@@ -7,7 +7,7 @@
 | [`with-design/`](with-design) | 요구사항 + 설계를 주고 서브에이전트(planner → architect → developer → tester → qa) 파이프라인으로 개발 | [01-post-create-requirements.md](with-design/docs/01-post-create-requirements.md) |
 | [`no-design/`](no-design) | 설계 없이 한 줄 프롬프트로 개발 | [01-post-create-prompt.md](no-design/docs/01-post-create-prompt.md) |
 
-버그율 측정: [docs/bug-rate-comparison.md](docs/bug-rate-comparison.md) — 요구서 기준 24개 시나리오에서 with-design 0건(0%), no-design 10건(41.7%) 실패 / 요구서와 무관한 일반 API 행동 27건에서 with-design 1건(3.7%), no-design 4건(14.8%) 실패
+버그율 측정: [docs/bug-rate-comparison.md](docs/bug-rate-comparison.md) — 51개 시나리오(요구서 기반 24 + 일반 API 행동 27)에서 with-design 1건(2.0%), no-design 14건(27.5%) 실패
 
 with-design 문서: [설계서](with-design/docs/02-post-create-design.md) · [QA 보고서](with-design/docs/03-post-create-qa.md)
 
