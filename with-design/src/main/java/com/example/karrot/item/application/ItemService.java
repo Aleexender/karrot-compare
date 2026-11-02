@@ -23,13 +23,13 @@ public class ItemService {
     // concurrent winner's row, so the existing item is read in a new read-only transaction instead.
     public ItemRegistration register(RegisterItemCommand command) {
         try {
-            return ItemRegistration.newItem(itemCreator.create(command));
+            return new ItemRegistration(itemCreator.create(command), true);
         } catch (DataIntegrityViolationException exception) {
             if (!isIdempotencyKeyConflict(exception)) {
                 throw exception;
             }
-            return ItemRegistration.existingItem(
-                    itemReader.getByIdempotencyKey(command.userId(), command.idempotencyKey()));
+            return new ItemRegistration(
+                    itemReader.getByIdempotencyKey(command.userId(), command.idempotencyKey()), false);
         }
     }
 
